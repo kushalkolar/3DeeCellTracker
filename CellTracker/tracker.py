@@ -81,7 +81,7 @@ def read_image(vol, path, name, z_range):
     image_raw = []
     for z in range(z_range[0], z_range[1]):
         image_raw.append(cv2.imread(path + name % (vol, z), -1))
-    return np.array(image_raw)
+    return np.array(image_raw).T
 
 
 def read_segmentation(path, name, z_range):
@@ -94,7 +94,7 @@ def read_segmentation(path, name, z_range):
     """
     segm = []
     for z in range(z_range[0], z_range[1]):
-        segm.append(cv2.imread(path + name %z, -1))
+        segm.append(tifffile.imread(path + name %z))
     return np.array(segm).transpose(1,2,0)
 
 def segmentation(vol, par_image, par_tracker, par_path, unet_model, method, neuron_num):
@@ -112,7 +112,17 @@ def segmentation(vol, par_image, par_tracker, par_path, unet_model, method, neur
     """
     t = time.time()
     image_norm = read_image(vol, par_path["raw_image_path"], par_path["files_name"], [1, par_image["z_siz"] + 1])
-    image_gcn = (image_norm.copy() / 65536.0).transpose(1, 2, 0)  # image_gcn will be used to correct tracking results
+
+    plt.imshow(image_norm.max(axis=2))
+    plt.title("image_norm")
+    plt.show()
+
+    image_gcn = (image_norm.copy() / 65536.0)#.transpose(1, 2, 0)  # image_gcn will be used to correct tracking results
+
+    plt.imshow(image_gcn.max(axis=2))
+    plt.title("image_gcn")
+    plt.show()
+
     image_cell_bg = save_unet_result(image_norm, par_image, par_path, par_tracker, unet_model, vol)
 
     # segment connected cell-like regions using watershed
@@ -130,15 +140,15 @@ def save_unet_result(image_norm, par_image, par_path, par_tracker, unet_model, v
     """
     predict cell regions and save the results
     """
-    try:
-        image_cell_bg = np.load(par_path["unet_path"] + "t%04i.npy" % (vol), allow_pickle=True)
-    except OSError:
-        # pre-processing: local contrast normalization
-        image_norm = normalize_image(image_norm, par_image, par_tracker)
+    #try:
+        #image_cell_bg = np.load(par_path["unet_path"] + "t%04i.npy" % (vol), allow_pickle=True)
+    #except OSError:
+    # pre-processing: local contrast normalization
+    image_norm = normalize_image(image_norm, par_image, par_tracker)
 
-        # predict cell-like regions using 3D U-net
-        image_cell_bg = unet3_prediction(image_norm, unet_model, shrink=par_image["shrink"])
-        np.save(par_path["unet_path"] + "t%04i.npy" % (vol), np.array(image_cell_bg, dtype="float16"))
+    # predict cell-like regions using 3D U-net
+    image_cell_bg = unet3_prediction(image_norm, unet_model, shrink=par_image["shrink"])
+    np.save(par_path["unet_path"] + "t%04i.npy" % (vol), np.array(image_cell_bg, dtype="float16"))
     return image_cell_bg
 
 
@@ -167,10 +177,33 @@ def normalize_image(image_norm, par_image, par_tracker):
     background_pixels = np.where(image_norm < np.median(image_norm))
     image_norm = image_norm - np.median(image_norm)
     image_norm[background_pixels] = 0
-    image_norm = lcn_gpu(image_norm, par_tracker["noise_level"], filter_size=(1, 27, 27),
-                         img3d_siz=(par_image["x_siz"], par_image["y_siz"], par_image["z_siz"]))
-    image_norm = image_norm.reshape(1, par_image["z_siz"], par_image["x_siz"], par_image["y_siz"], 1)
-    image_norm = image_norm.transpose(0, 2, 3, 1, 4)
+    image_norm = lcn_gpu(image_norm, par_tracker["noise_level"], filter_size=(1, 27, 27), img3d_siz=(par_image["x_siz"], par_image["y_siz"], par_image["z_siz"])).T
+
+    print(image_norm[:, :, :].shape)
+    plt.imshow(image_norm[:, :, :].max(axis=2))
+    plt.title("norm after lcn gpu")
+    plt.show()
+
+
+    #image_norm = image_norm.reshape(1, 50, 458, 1021, 1)
+
+    image_norm = np.expand_dims(image_norm, axis=(0, 4))
+    print(image_norm.shape)
+
+    print(image_norm[0,: ,: ,: , 0].shape)
+    plt.imshow(image_norm[0,: , :, :, 0].max(axis=2))
+    plt.title("norm after reshape")
+    plt.show()
+
+    #image_norm = image_norm.transpose(0, 2, 3, 1, 4)
+
+    print(image_norm[0,: ,: ,: , 0].shape)
+    plt.imshow(image_norm[0,: , :, :, 0].max(axis=1))
+    plt.title("norm after transpose")
+    plt.show()
+
+
+
     elapsed = time.time() - t
     print('pre-processing took %.1f s' % elapsed)
     return image_norm
